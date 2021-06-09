@@ -75,13 +75,6 @@ jobs:
     runs-on: ubuntu-18.04
     needs:
       - fetch-metadata
-    strategy:
-      matrix:
-        include:
-          - target-os: linux
-            target-arch: amd64
-          - target-os: linux
-            target-arch: arm64
     steps:
       - uses: actions/checkout@v1
       - name: Download latest buildkit
@@ -99,15 +92,11 @@ jobs:
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v1
-        if: ${{ matrix.target-arch != 'amd64' }}
 
       - name: Build image
         id: build
         if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' || github.ref != 'refs/heads/master' }}
         env:
-          PLATFORM: ${{ format('{0}/{1}', matrix.target-os, matrix.target-arch) }}
-          TARGET_OS: ${{ matrix.target-os }}
-          TARGET_ARCH: ${{ matrix.target-arch }}
           KUBECTL_VERSION: ${{ needs.fetch-metadata.outputs.kubectl-version }}
           KUSTOMIZE_VERSION: ${{ needs.fetch-metadata.outputs.kustomize-version }}
         run: |
@@ -115,9 +104,7 @@ jobs:
             --frontend=dockerfile.v0 \
             --local dockerfile=. \
             --local context=. \
-            --opt platform="${PLATFORM}" \
-            --opt build-arg:TARGET_OS="${TARGET_OS}" \
-            --opt build-arg:TARGET_ARCH="${TARGET_ARCH}" \
+            --opt platform="linux/amd64,linux/arm64" \
             --opt build-arg:KUBECTL_VERSION="${KUBECTL_VERSION}" \
             --opt build-arg:KUSTOMIZE_VERSION="${KUSTOMIZE_VERSION}" \
             --opt target=test
@@ -134,9 +121,6 @@ jobs:
         # if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' && github.ref == 'refs/heads/master' }}
         if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' }}
         env:
-          PLATFORM: ${{ format('{0}/{1}', matrix.target-os, matrix.target-arch) }}
-          TARGET_OS: ${{ matrix.target-os }}
-          TARGET_ARCH: ${{ matrix.target-arch }}
           KUBECTL_VERSION: ${{ needs.fetch-metadata.outputs.kubectl-version }}
           KUSTOMIZE_VERSION: ${{ needs.fetch-metadata.outputs.kustomize-version }}
           REPO_OWNER: ${{ github.repository_owner }}
@@ -146,9 +130,7 @@ jobs:
             --frontend=dockerfile.v0 \
             --local dockerfile=. \
             --local context=. \
-            --opt platform="${PLATFORM}" \
-            --opt build-arg:TARGET_OS="${TARGET_OS}" \
-            --opt build-arg:TARGET_ARCH="${TARGET_ARCH}" \
+            --opt platform="linux/amd64,linux/arm64" \
             --opt build-arg:KUBECTL_VERSION="${KUBECTL_VERSION}" \
             --opt build-arg:KUSTOMIZE_VERSION="${KUSTOMIZE_VERSION}" \
             --opt target=runtime \
