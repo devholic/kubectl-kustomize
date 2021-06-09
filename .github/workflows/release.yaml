@@ -1,95 +1,153 @@
 name: Release
 on:
   push:
-    branches:
-    - master
   schedule:
-  - cron: "0 */8 * * *"
+    - cron: "0 */8 * * *"
   workflow_dispatch: {}
 jobs:
+  fetch-metadata:
+    runs-on: ubuntu-18.04
+    outputs:
+      kubectl-version: ${{ steps.kubectl.outputs.version }}
+      kustomize-version: ${{ steps.kustomize.outputs.version }}
+      image-exists: ${{ steps.image-existence.outputs.exists }}
+      image-tag: ${{ steps.image-existence.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v1
+      - name: Prepare checking latest kubectl version
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          docker build . \
+            -f metadata.Dockerfile \
+            -t ${REPO_OWNER}/kubectl-kustomize:kubectl-version \
+            --target latest-kubectl-version
+
+      - name: Check latest kubectl version
+        id: kubectl
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          if version=$(docker run ${REPO_OWNER}/kubectl-kustomize:kubectl-version); then
+            echo ::set-output name=version::$version
+          else
+            exit 1
+          fi
+
+      - name: Prepare checking latest kustomize release
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          docker build . \
+            -f metadata.Dockerfile \
+            -t ${REPO_OWNER}/kubectl-kustomize:kustomize-version \
+            --target latest-kustomize-version
+
+      - name: Check latest kustomize version
+        id: kustomize
+        env:
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          if version=$(docker run ${REPO_OWNER}/kubectl-kustomize:kustomize-version); then
+            echo ::set-output name=version::$version
+          else
+            exit 1
+          fi
+
+      - name: Check image exists on registry
+        id: image-existence
+        env:
+          IMAGE_TAG: ${{ format('{0}-{1}', steps.kubectl.outputs.version, steps.kustomize.outputs.version) }}
+          REPO_OWNER: ${{ github.repository_owner }}
+        shell: bash +e {0}
+        run: |
+          echo ::set-output name=tag::${IMAGE_TAG}
+          result="$(DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect ${REPO_OWNER}/kubectl-kustomize:${IMAGE_TAG} 2>&1)"
+          if [[ $? -eq 0 ]]; then
+            echo ::set-output name=exists::true
+          elif [[ $result == *"no such manifest"* ]]; then
+            echo ::set-output name=exists::false
+          else
+            echo $result
+            exit 1;
+          fi
   release:
     runs-on: ubuntu-18.04
+    needs:
+      - fetch-metadata
+    strategy:
+      matrix:
+        include:
+          - target-os: linux
+            target-arch: amd64
+          - target-os: linux
+            target-arch: arm64
     steps:
-    - uses: actions/checkout@v1
-    - name: Prepare checking latest kubectl version
-      env:
-        REPO_OWNER: ${{github.repository_owner}}
-      run: docker build . -t ${REPO_OWNER}/kubectl-kustomize:kubectl-version --target latest-kubectl-version
-    - name: Check latest kubectl version
-      id: kubectl
-      env:
-        REPO_OWNER: ${{github.repository_owner}}
-      run: |
-        if version=$(docker run ${REPO_OWNER}/kubectl-kustomize:kubectl-version); then
-          echo ::set-output name=version::$version
-        else
-          exit 1
-        fi
-    - name: Prepare checking latest kustomize release
-      env:
-        REPO_OWNER: ${{github.repository_owner}}
-      run: |
-        docker build . -t ${REPO_OWNER}/kubectl-kustomize:kustomize-version --target latest-kustomize-version
-    - name: Check latest kustomize version
-      id: kustomize
-      env:
-        REPO_OWNER: ${{github.repository_owner}}
-      run: |
-        if version=$(docker run ${REPO_OWNER}/kubectl-kustomize:kustomize-version); then
-          echo ::set-output name=version::$version
-        else
-          exit 1
-        fi
-    - name: Check image exists on registry
-      id: image_existence
-      env:
-        IMAGE_TAG: ${{ format('{0}-{1}', steps.kubectl.outputs.version, steps.kustomize.outputs.version) }}
-        REPO_OWNER: ${{github.repository_owner}}
-      shell: bash +e {0}
-      run: |
-        echo ::set-output name=tag::${IMAGE_TAG}
-        result="$(DOCKER_CLI_EXPERIMENTAL=enabled docker manifest inspect ${REPO_OWNER}/kubectl-kustomize:${IMAGE_TAG} 2>&1)"
-        if [[ $? -eq 0 ]]; then
-          echo ::set-output name=exists::true
-        elif [[ $result == *"no such manifest"* ]]; then
-          echo ::set-output name=exists::false
-        else
-          echo $result
-          exit 1;
-        fi
-    # https://github.com/docker/setup-qemu-action
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v1
-    # https://github.com/docker/setup-buildx-action
-    - name: Set up Docker Buildx
-      id: buildx
-      uses: docker/setup-buildx-action@v1
-    # List available platforms for buildx
-    - name: Available platforms
-      run: echo ${{ steps.buildx.outputs.platforms }}
-    # Build the image using buildx
-    - name: Login to Docker Hub
-      uses: docker/login-action@v1
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-    - name: Build and push
-      id: build
-      if: steps.image_existence.outputs.exists == 'false'
-      env:
-        BUILDER_INSTANCE: ${{ steps.buildx.outputs.name }}
-        IMAGE_TAG: ${{ steps.image_existence.outputs.tag }}
-        KUBECTL_VERSION: ${{ steps.kubectl.outputs.version }}
-        KUSTOMIZE_VERSION: ${{ steps.kustomize.outputs.version }}
-        REPO_OWNER: ${{github.repository_owner}}
-      run: |
-        docker buildx build \
-          --builder ${BUILDER_INSTANCE} \
-          --tag ${REPO_OWNER}/kubectl-kustomize:${IMAGE_TAG} \
-          --tag ${REPO_OWNER}/kubectl-kustomize:latest \
-          --platform linux/amd64,linux/arm64 \
-          --push \
-          --build-arg KUBECTL_VERSION=${KUBECTL_VERSION} \
-          --build-arg KUSTOMIZE_VERSION=${KUSTOMIZE_VERSION} \
-          .
-        echo ::set-output name=tag::${IMAGE_TAG}
+      - uses: actions/checkout@v1
+      - name: Download latest buildkit
+        run: |
+          BUILDKIT_LATEST_VERSION=$(curl -fsL https://api.github.com/repos/moby/buildkit/releases/latest | jq -r .tag_name)
+          curl -sSLf https://github.com/moby/buildkit/releases/download/${BUILDKIT_LATEST_VERSION}/buildkit-${BUILDKIT_LATEST_VERSION}.linux-amd64.tar.gz | \
+            sudo tar -xz -C /usr/local/bin/ --strip-components=1
+
+      - name: Start buildkit daemon
+        run: |
+          sudo install -d -m 0750 -o root -g docker /run/buildkit
+          sudo -b buildkitd
+          while ! test -S /run/buildkit/buildkitd.sock; do sleep 0.1; done
+          sudo chgrp docker /run/buildkit/buildkitd.sock
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v1
+        if: ${{ matrix.target-arch != 'amd64' }}
+
+      - name: Build image
+        id: build
+        if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' || github.ref != 'refs/heads/master' }}
+        env:
+          PLATFORM: ${{ format('{0}/{1}', matrix.target-os, matrix.target-arch) }}
+          TARGET_OS: ${{ matrix.target-os }}
+          TARGET_ARCH: ${{ matrix.target-arch }}
+          KUBECTL_VERSION: ${{ needs.fetch-metadata.outputs.kubectl-version }}
+          KUSTOMIZE_VERSION: ${{ needs.fetch-metadata.outputs.kustomize-version }}
+        run: |
+          buildctl build \
+            --frontend=dockerfile.v0 \
+            --local dockerfile=. \
+            --local context=. \
+            --opt platform="${PLATFORM}" \
+            --opt build-arg:TARGET_OS="${TARGET_OS}" \
+            --opt build-arg:TARGET_ARCH="${TARGET_ARCH}" \
+            --opt build-arg:KUBECTL_VERSION="${KUBECTL_VERSION}" \
+            --opt build-arg:KUSTOMIZE_VERSION="${KUSTOMIZE_VERSION}" \
+            --opt target=test
+
+      - name: Login to Docker Hub
+        if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' && github.ref == 'refs/heads/master' }}
+        uses: azure/docker-login@v1
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Push image
+        if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' && github.ref == 'refs/heads/master' }}
+        env:
+          PLATFORM: ${{ format('{0}/{1}', matrix.target-os, matrix.target-arch) }}
+          TARGET_OS: ${{ matrix.target-os }}
+          TARGET_ARCH: ${{ matrix.target-arch }}
+          KUBECTL_VERSION: ${{ needs.fetch-metadata.outputs.kubectl-version }}
+          KUSTOMIZE_VERSION: ${{ needs.fetch-metadata.outputs.kustomize-version }}
+          REPO_OWNER: ${{ github.repository_owner }}
+          IMAGE_TAG: ${{ needs.fetch-metadata.outputs.image-tag }}
+        run: |
+          buildctl build \
+            --frontend=dockerfile.v0 \
+            --local dockerfile=. \
+            --local context=. \
+            --opt platform="${PLATFORM}" \
+            --opt build-arg:TARGET_OS="${TARGET_OS}" \
+            --opt build-arg:TARGET_ARCH="${TARGET_ARCH}" \
+            --opt build-arg:KUBECTL_VERSION="${KUBECTL_VERSION}" \
+            --opt build-arg:KUSTOMIZE_VERSION="${KUSTOMIZE_VERSION}" \
+            --opt target=runtime \
+            --output type=image,\"name=${REPO_OWNER}/kubectl-kustomize:${IMAGE_TAG},${REPO_OWNER}/kubectl-kustomize:latest\",push=true
