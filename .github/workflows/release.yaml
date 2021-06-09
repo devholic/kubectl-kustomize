@@ -123,14 +123,16 @@ jobs:
             --opt target=test
 
       - name: Login to Docker Hub
-        if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' && github.ref == 'refs/heads/master' }}
+        # if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' && github.ref == 'refs/heads/master' }}
+        if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' }}
         uses: azure/docker-login@v1
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Push image
-        if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' && github.ref == 'refs/heads/master' }}
+        # if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' && github.ref == 'refs/heads/master' }}
+        if: ${{ needs.fetch-metadata.outputs.image-exists == 'false' }}
         env:
           PLATFORM: ${{ format('{0}/{1}', matrix.target-os, matrix.target-arch) }}
           TARGET_OS: ${{ matrix.target-os }}
